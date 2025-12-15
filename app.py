@@ -6,8 +6,17 @@ from streamlit_calendar import calendar
 
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
-spreadsheet_url = st.secrets.connections.gsheets.spreadsheet
-conn = st.connection("gsheets", type=GSheetsConnection, spreadsheet=spreadsheet_url)
+# get_safe_connection を定義
+def get_safe_connection():
+    conf = st.secrets.connections.gsheets.to_dict()
+    if "private_key" in conf:
+        conf["private_key"] = conf["private_key"].replace("\\n", "\n")
+    if "type" in conf:
+        del conf["type"]
+    return st.connection("gsheets", type=GSheetsConnection, **conf)
+
+# 接続実行
+conn = get_safe_connection()
 
 def load_data():
     try:
