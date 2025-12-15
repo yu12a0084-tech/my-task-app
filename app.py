@@ -6,6 +6,16 @@ from streamlit_calendar import calendar
 
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
+# 右上のメニューや「Made with Streamlit」を隠す設定
+hide_st_style = """
+            <style>
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+            </style>
+            """
+st.markdown(hide_st_style, unsafe_allow_code=True)
+
 # --- スプレッドシート接続 ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
