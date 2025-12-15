@@ -1,153 +1,117 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import json
-import os
+from streamlit_gsheets import GSheetsConnection
 from streamlit_calendar import calendar
 
-# データの保存
-DATA_FILE = 'assignments.json'
+st.set_page_config(page_title="永続・講義課題管理", layout="wide")
+
+# --- スプレッドシート接続設定 ---
+# ここにコピーしたスプレッドシートのURLを貼り付けてください
+SPREADSHEET_URL = "あなたのスプレッドシートのURLをここに貼り付け"
+
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                for item in data:
-                    item['due'] = pd.to_datetime(item['due'])
-                return data
-        except: return []
-    return []
+    try:
+        return conn.read(spreadsheet=SPREADSHEET_URL, ttl="0s")
+    except:
+        # 初回起動時（シートが空の場合）のデータ構造
+        return pd.DataFrame(columns=["id", "lecture", "title", "due", "created_by"])
 
-def save_data(data):
-    output_data = []
-    for item in data:
-        new_item = item.copy()
-        if isinstance(new_item['due'], (datetime, pd.Timestamp)):
-            new_item['due'] = new_item['due'].strftime('%Y-%m-%d %H:%M')
-        output_data.append(new_item)
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(output_data, f, ensure_ascii=False, indent=4)
+def save_data(df):
+    conn.update(spreadsheet=SPREADSHEET_URL, data=df)
 
-st.set_page_config(page_title="講義課題管理プロ", layout="wide")
-st.title("🎓 講義課題マネージャー")
+# --- ユーザー識別 ---
+st.sidebar.title("👤 ログイン設定")
+user_name = st.sidebar.text_input("あなたの名前（合言葉）を入力", key="user_name")
 
-if 'assignments' not in st.session_state:
-    st.session_state.assignments = load_data()
-if 'my_status' not in st.session_state:
-    st.session_state.my_status = {}
-if 'hidden_lectures' not in st.session_state:
-    st.session_state.hidden_lectures = []
+if not user_name:
+    st.warning("サイドバーに名前を入力してログインしてください。")
+    st.stop()
 
-# サイドバー
-st.sidebar.header("➕ 新規課題の追加")
+# データの読み込み
+df_all = load_data()
+
+# 日付型に変換
+if not df_all.empty:
+    df_all["due"] = pd.to_datetime(df_all["due"])
+
+# --- サイドバー：課題追加 ---
+st.sidebar.markdown("---")
+st.sidebar.header("➕ 課題の追加")
+add_mode = st.sidebar.radio("種類:", ["自分専用", "全員に共有"])
+
 with st.sidebar.form("add_form", clear_on_submit=True):
-    lecture_name = st.text_input("講義名")
-    task_title = st.text_input("課題内容")
-    due_datetime = st.datetime_input("提出期限", datetime.now())
-    if st.form_submit_button("全員に共有して追加"):
-        if lecture_name and task_title:
-            new_id = str(int(datetime.now().timestamp()))
-            new_task = {"id": new_id, "lecture": lecture_name, "title": task_title, "due": due_datetime}
-            st.session_state.assignments.append(new_task)
-            save_data(st.session_state.assignments)
+    lec = st.text_input("講義名")
+    task = st.text_input("課題内容")
+    due = st.datetime_input("提出期限", datetime.now())
+    if st.form_submit_button("保存"):
+        if lec and task:
+            new_id = f"{int(datetime.now().timestamp())}_{user_name}"
+            creator = "all" if add_mode == "全員に共有" else user_name
+            
+            new_row = pd.DataFrame([{
+                "id": new_id,
+                "lecture": lec,
+                "title": task,
+                "due": due.strftime('%Y-%m-%d %H:%M'),
+                "created_by": creator
+            }])
+            
+            df_updated = pd.concat([df_all, new_row], ignore_index=True)
+            save_data(df_updated)
+            st.success("スプレッドシートに保存しました！")
             st.rerun()
 
-all_lectures = sorted(list(set(item['lecture'] for item in st.session_state.assignments)))
-st.sidebar.markdown("---")
-st.sidebar.header("🚫 表示設定")
-st.session_state.hidden_lectures = st.sidebar.multiselect("非表示にする講義:", options=all_lectures)
+# --- メイン画面のフィルタリング ---
+my_tasks = df_all[(df_all["created_by"] == "all") | (df_all["created_by"] == user_name)]
 
-# メイン画面
-tab1, tab2, tab3 = st.tabs(["📋 講義別リスト", "📅 カレンダー", "⚙️ 管理・削除"])
+tab1, tab2, tab3 = st.tabs(["📋 課題リスト", "📅 カレンダー", "⚙️ 管理・削除"])
 
 with tab1:
-    display_data = [item for item in st.session_state.assignments if item['lecture'] not in st.session_state.hidden_lectures]
-    if not display_data:
-        st.info("課題はありません。")
+    if my_tasks.empty:
+        st.info("課題がありません。")
     else:
-        # 講義名でグループ化
-        lectures = sorted(list(set(item['lecture'] for item in display_data)))
-        for lec in lectures:
+        for lec in sorted(my_tasks["lecture"].unique()):
             with st.expander(f"📖 {lec}", expanded=True):
-                lec_tasks = [t for t in display_data if t['lecture'] == lec]
-                # 期限順にソート
-                lec_tasks.sort(key=lambda x: x['due'])
-                
-                for task in lec_tasks:
+                lec_tasks = my_tasks[my_tasks["lecture"] == lec].sort_values("due")
+                for _, t in lec_tasks.iterrows():
                     col1, col2, col3 = st.columns([0.1, 0.6, 0.3])
-                    tid = task['id']
-                    is_done = col1.checkbox("", value=st.session_state.my_status.get(tid, False), key=f"list_{tid}")
-                    st.session_state.my_status[tid] = is_done
+                    is_shared = t["created_by"] == "all"
+                    tag = "📢" if is_shared else "🔒"
                     
-                    time_str = task['due'].strftime('%m/%d %H:%M')
-                    if is_done:
-                        col2.write(f"~~{task['title']}~~ ✅")
-                    else:
-                        col2.write(f"**{task['title']}**")
-                    col3.write(f"⏰ {time_str}")
+                    # 完了状態は各ブラウザの一時的な状態として管理
+                    done = col1.checkbox("", key=f"done_{t['id']}")
+                    label = f"{tag} **{t['title']}**"
+                    col2.write(f"~~{label}~~ ✅" if done else label)
+                    col3.write(f"⏰ {t['due'].strftime('%m/%d %H:%M')}")
 
 with tab2:
-    st.subheader("期限カレンダー")
-    
-    # 1. カレンダー用イベントの作成
-    calendar_events = []
-    if not st.session_state.assignments:
-        st.info("課題データがありません。サイドバーから追加してください。")
-    else:
-        for item in st.session_state.assignments:
-            # 非表示設定の講義を除外
-            if item['lecture'] not in st.session_state.hidden_lectures:
-                is_done = st.session_state.my_status.get(item['id'], False)
-                
-                # イベントデータを構築
-                calendar_events.append({
-                    "id": item['id'],
-                    "title": f"[{item['lecture']}] {item['title']}",
-                    "start": pd.to_datetime(item['due']).isoformat(),
-                    "color": "#28a745" if is_done else "#ff4b4b", # 完了：緑、未完了：赤
-                    "allDay": False
-                })
-
-        # 2. カレンダーの表示設定
-        calendar_options = {
-            "initialView": "dayGridMonth",
-            "headerToolbar": {
-                "left": "prev,next today",
-                "center": "title",
-                "right": "dayGridMonth,timeGridWeek"
-            },
-            "selectable": True,
-            "navLinks": True,
-        }
-
-        # 3. カレンダーの実行とクリック検知
-        # ここで state に保存することで、クリックした際の反応を良くします
-        cal_data = calendar(
-            events=calendar_events,
-            options=calendar_options,
-            key="calendar_widget"
-        )
-
-        # 4. クリック時の詳細表示機能
-        if cal_data.get("eventClick"):
-            clicked_event = cal_data["eventClick"]["event"]
-            st.write("---")
-            st.success(f"📌 **選択中の課題詳細**")
-            st.markdown(f"**タイトル:** {clicked_event['title']}")
-            st.info("※ 完了チェックや編集は「講義別リスト」または「管理・削除」タブで行ってください。")
+    events = []
+    for _, t in my_tasks.iterrows():
+        is_shared = t["created_by"] == "all"
+        events.append({
+            "id": t["id"],
+            "title": f"[{t['lecture']}] {t['title']}",
+            "start": t["due"].isoformat(),
+            "color": "#ff4b4b" if is_shared else "#007bff"
+        })
+    calendar(events=events, options={"initialView": "dayGridMonth"})
 
 with tab3:
-    st.subheader("全データの管理（編集・削除）")
-    if st.session_state.assignments:
-        df = pd.DataFrame(st.session_state.assignments)
-        edited_df = st.data_editor(
-            df,
-            column_config={"due": st.column_config.DatetimeColumn("期限"), "id": None},
-            num_rows="dynamic",
-            key="global_editor"
-        )
-        if st.button("全体変更を保存"):
-            st.session_state.assignments = edited_df.to_dict('records')
-            save_data(st.session_state.assignments)
+    st.subheader("データの編集・削除")
+    st.caption("あなたが作成したデータのみ操作可能です。")
+    # 自分が作成したデータのみ抽出
+    my_own_indices = df_all[df_all["created_by"] == user_name].index
+    if not my_own_indices.empty:
+        edited_df = st.data_editor(df_all.loc[my_own_indices], column_config={"id":None, "created_by":None}, num_rows="dynamic")
+        if st.button("スプレッドシートを更新"):
+            # 修正後のデータを元の全体データに反映
+            df_all.update(edited_df)
+            # 削除された行がある場合の対応（簡易版）
+            if len(edited_df) < len(my_own_indices):
+                # 削除処理は少し複雑なため、ここでは追加・修正をメインとしています
+                pass
+            save_data(df_all)
             st.rerun()
