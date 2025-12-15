@@ -7,15 +7,19 @@ from streamlit_calendar import calendar  # ← これが NameError の原因で�
 # ページ設定
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
-# --- binascii.Error / 秘密鍵の改行対策 ---
-if "connections" in st.secrets and "gsheets" in st.secrets.connections:
-    secret_data = st.secrets.connections.gsheets
-    if "private_key" in secret_data:
-        # Secrets内の文字列 "\n" を実際の改行コードに変換
-        secret_data["private_key"] = secret_data["private_key"].replace("\\n", "\n")
+# --- スプレッドシート接続設定 (TypeError対策版) ---
+def get_gsheets_connection():
+    # Secretsからデータを取得
+    conf = st.secrets.connections.gsheets.to_dict()
+    # 秘密鍵の改行文字（\n）を本物の改行コードに変換
+    if "private_key" in conf:
+        conf["private_key"] = conf["private_key"].replace("\\n", "\n")
+    
+    # 修正した設定を使って接続を作成
+    return st.connection("gsheets", type=GSheetsConnection, **conf)
 
-# --- スプレッドシート接続 ---
-conn = st.connection("gsheets", type=GSheetsConnection)
+# 接続の実行
+conn = get_gsheets_connection()
 
 def load_data():
     try:
