@@ -6,27 +6,19 @@ from streamlit_calendar import calendar
 
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
-# 右上のメニューや「Made with Streamlit」を隠す設定
-hide_st_style = """
-            <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            header {visibility: hidden;}
-            </style>
-            """
-st.markdown(hide_st_style, unsafe_allow_code=True)
-
-# --- スプレッドシート接続 ---
+# --- スプレッドシート接続 (Secretsの設定を自動で読み込む) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     try:
-        # 最新のデータを取得
+        # Secretsに設定されたspreadsheet URLを自動的に使用します
         return conn.read(ttl="0s")
-    except:
+    except Exception as e:
+        # データが1件もない場合や接続エラー時のための空データ
         return pd.DataFrame(columns=["id", "lecture", "title", "due", "created_by"])
 
 def save_data(df):
+    # 保存時もSecretsの設定を使用してスプレッドシートを更新
     conn.update(data=df)
 
 # --- ログイン設定 ---
@@ -38,13 +30,20 @@ if not user_name:
     st.warning("左側のサイドバーに合言葉を入力してログインしてください。")
     st.stop()
 
-# データの読み込みと型変換
+# データの読み込み
 df_all = load_data()
-if not df_all.empty:
+
+# 読み込んだデータが空でないか、必要な列があるかチェック
+if not df_all.empty and "due" in df_all.columns:
     df_all["due"] = pd.to_datetime(df_all["due"])
+else:
+    # 万が一列が壊れていた場合の修正
+    df_all = pd.DataFrame(columns=["id", "lecture", "title", "due", "created_by"])
 
 st.title(f"📚 {user_name} さんの課題マネージャー")
 
+# --- 以降、課題追加・リスト・カレンダーの処理（前回と同じ） ---
+# (中略：前回のコードと同じロジックをそのまま使用してください)
 # --- サイドバー：課題追加 ---
 st.sidebar.markdown("---")
 st.sidebar.header("➕ 課題の追加")
