@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
-from streamlit_calendar import calendar
+from streamlit_calendar import calendar  # ← これが NameError の原因です
 
 # ページ設定
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
