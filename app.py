@@ -7,12 +7,20 @@ from streamlit_calendar import calendar
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
 def get_connection():
-    conf = st.secrets.connections.gsheets.to_dict()
-    if "private_key" in conf:
-        conf["private_key"] = conf["private_key"].replace("\\n", "\n").strip()
-    if "type" in conf:
-        del conf["type"]
-    return st.connection("gsheets", type=GSheetsConnection, **conf)
+    s = st.secrets.connections.gsheets
+    return st.connection(
+        "gsheets",
+        type=GSheetsConnection,
+        project_id=s.project_id,
+        private_key_id=s.private_key_id,
+        private_key=s.private_key.replace("\\n", "\n"),
+        client_email=s.client_email,
+        client_id=s.client_id,
+        auth_uri=s.auth_uri,
+        token_uri=s.token_uri,
+        auth_provider_x509_cert_url=s.auth_provider_x509_cert_url,
+        client_x509_cert_url=s.client_x509_cert_url
+    )
 
 conn = get_connection()
 url = st.secrets.connections.gsheets.spreadsheet
@@ -35,50 +43,44 @@ def save_data(df):
         conn.update(spreadsheet=url, data=df)
         return True
     except Exception as e:
-        st.error(f"保存失敗: {e}")
+        st.error(f"Error: {e}")
         return False
 
 st.sidebar.title("👤 ログイン")
-user_name = st.sidebar.text_input("合言葉を入力してください", key="user_name")
+user_name = st.sidebar.text_input("合言葉を入力", key="user_name")
 
 if not user_name:
-    st.info("サイドバーに合言葉を入力してログインしてください。")
     st.stop()
 
 df_all = load_data()
 if not df_all.empty:
     df_all["due"] = pd.to_datetime(df_all["due"], errors='coerce').fillna(pd.Timestamp.now())
 
-st.title(f"📚 {user_name} さんの課題管理")
+st.title(f"📚 {user_name} さんの課題")
 
-with st.sidebar.form("add_form", clear_on_submit=True):
-    st.header("➕ 課題追加")
+with st.sidebar.form("add_task"):
     lec = st.text_input("講義名")
-    task = st.text_input("課題内容")
-    d = st.date_input("提出日", datetime.now())
-    t = st.time_input("提出時間", datetime.now())
+    task = st.text_input("内容")
+    d = st.date_input("日付", datetime.now())
+    t = st.time_input("時間", datetime.now())
     if st.form_submit_button("保存"):
-        if lec and task:
-            new_row = pd.DataFrame([{
-                "id": str(datetime.now().timestamp()),
-                "lecture": lec,
-                "title": task,
-                "due": datetime.combine(d, t).strftime('%Y-%m-%d %H:%M'),
-                "created_by": user_name
-            }])
-            if save_data(pd.concat([df_all, new_row], ignore_index=True)):
-                st.success("保存完了")
-                st.rerun()
+        new_row = pd.DataFrame([{
+            "id": str(datetime.now().timestamp()),
+            "lecture": lec,
+            "title": task,
+            "due": datetime.combine(d, t).strftime('%Y-%m-%d %H:%M'),
+            "created_by": user_name
+        }])
+        if save_data(pd.concat([df_all, new_row], ignore_index=True)):
+            st.success("Saved")
+            st.rerun()
 
-view_df = df_all[df_all["created_by"] == user_name]
-tab1, tab2 = st.tabs(["📋 リスト", "📅 カレンダー"])
+view = df_all[df_all["created_by"] == user_name]
+t1, t2 = st.tabs(["List", "Calendar"])
 
-with tab1:
-    if view_df.empty:
-        st.write("課題はありません。")
-    else:
-        st.dataframe(view_df[["lecture", "title", "due"]], use_container_width=True)
+with t1:
+    st.dataframe(view[["lecture", "title", "due"]], use_container_width=True)
 
-with tab2:
-    events = [{"title": f"[{t['lecture']}] {t['title']}", "start": t["due"].isoformat()} for _, t in view_df.iterrows()]
+with t2:
+    events = [{"title": f"[{t['lecture']}] {t['title']}", "start": t["due"].isoformat()} for _, t in view.iterrows()]
     calendar(events=events)
