@@ -6,116 +6,95 @@ from streamlit_calendar import calendar
 
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
-# --- 接続設定 ---
-# 余計な引数をすべて削除し、ライブラリが Secrets ([connections.gsheets]) を
-# 自動で探して読み込む標準的な方法に変更します。
-conn = st.connection("gsheets", type=GSheetsConnection)
+def get_safe_connection():
+    conf = st.secrets.connections.gsheets.to_dict()
+    if "private_key" in conf:
+        conf["private_key"] = conf["private_key"].replace("\\n", "\n")
+    if "type" in conf:
+        del conf["type"]
+    return st.connection("gsheets", type=GSheetsConnection, **conf)
+
+conn = get_safe_connection()
 
 def load_data():
     try:
-        # 読み込み
         data = conn.read(ttl="0s")
         if data is None or data.empty:
             return pd.DataFrame(columns=["id", "lecture", "title", "due", "created_by"])
+        
+        # 列名がズレていた場合に強制的に合わせる
+        expected_cols = ["id", "lecture", "title", "due", "created_by"]
+        if list(data.columns) != expected_cols:
+            data.columns = expected_cols + list(data.columns)[len(expected_cols):]
+            
         return data
     except Exception:
         return pd.DataFrame(columns=["id", "lecture", "title", "due", "created_by"])
 
 def save_data(df):
-    try:
-        conn.update(data=df)
-    except Exception as e:
-        st.error(f"保存に失敗しました: {e}")
+    conn.update(data=df)
 
-# --- ログイン設定 ---
-st.sidebar.title("👤 ログイン設定")
-user_name = st.sidebar.text_input("合言葉を入力してください", key="user_name")
+st.sidebar.title("👤 ログイン")
+user_name = st.sidebar.text_input("合言葉を入力（例：ゆうすけ29）", key="user_name")
 
 if not user_name:
-    st.warning("左側のサイドバーに合言葉を入力してログインしてください。")
+    st.info("左側のサイドバーに合言葉を入力してください。")
     st.stop()
 
-# データの取得と日付の正規化
 df_all = load_data()
-if not df_all.empty and "due" in df_all.columns:
-    df_all["due"] = pd.to_datetime(df_all["due"], errors='coerce')
-    df_all["due"] = df_all["due"].fillna(pd.Timestamp.now())
-else:
-    df_all = pd.DataFrame(columns=["id", "lecture", "title", "due", "created_by"])
 
-st.title(f"📚 {user_name} さんの課題マネージャー")
+# 日付形式の修正
+if not df_all.empty:
+    df_all["due"] = pd.to_datetime(df_all["due"], errors='coerce').fillna(pd.Timestamp.now())
 
-# --- 課題追加フォーム ---
-st.sidebar.markdown("---")
-st.sidebar.header("➕ 課題の追加")
-add_mode = st.sidebar.radio("追加の種類:", ["自分専用", "全員に共有"])
+st.title(f"📚 {user_name} さんの課題")
 
+# 課題追加（サイドバー）
 with st.sidebar.form("add_form", clear_on_submit=True):
+    st.header("➕ 課題追加")
+    add_mode = st.radio("共有範囲", ["自分専用", "全員に共有"])
     lec = st.text_input("講義名")
     task = st.text_input("課題内容")
-    due_date = st.date_input("提出日", datetime.now())
-    due_time = st.time_input("提出時間", datetime.now())
+    due_d = st.date_input("日付", datetime.now())
+    due_t = st.time_input("時刻", datetime.now())
     
     if st.form_submit_button("保存"):
         if lec and task:
-            new_id = f"{int(datetime.now().timestamp())}_{user_name}"
+            new_id = f"{int(datetime.now().timestamp())}"
             creator = "all" if add_mode == "全員に共有" else user_name
-            due_dt = datetime.combine(due_date, due_time)
+            due_str = datetime.combine(due_d, due_t).strftime('%Y-%m-%d %H:%M')
             
-            new_row = pd.DataFrame([{
-                "id": new_id,
-                "lecture": lec,
-                "title": task,
-                "due": due_dt.strftime('%Y-%m-%d %H:%M'),
-                "created_by": creator
-            }])
-            
+            new_row = pd.DataFrame([{"id": new_id, "lecture": lec, "title": task, "due": due_str, "created_by": creator}])
             df_updated = pd.concat([df_all, new_row], ignore_index=True)
             save_data(df_updated)
-            st.success("保存完了！")
+            st.success("保存しました！")
             st.rerun()
 
-# --- メイン表示 ---
+# フィルタリング（自分の課題 + 全員共有の課題）
+# 入力した合言葉とスプレッドシートの created_by が一致するものだけを表示
 my_visible_tasks = df_all[(df_all["created_by"] == "all") | (df_all["created_by"] == user_name)]
-tab1, tab2, tab3 = st.tabs(["📋 講義別リスト", "📅 カレンダー", "⚙️ 管理・削除"])
+
+tab1, tab2 = st.tabs(["📋 リスト", "📅 カレンダー"])
 
 with tab1:
     if my_visible_tasks.empty:
-        st.info("表示できる課題がありません。")
+        st.warning(f"現在、{user_name} さんが閲覧できる課題はありません。サイドバーから新しく追加してください。")
     else:
         for lec in sorted(my_visible_tasks["lecture"].unique()):
             with st.expander(f"📖 {lec}", expanded=True):
                 lec_tasks = my_visible_tasks[my_visible_tasks["lecture"] == lec].sort_values("due")
                 for _, t in lec_tasks.iterrows():
-                    col1, col2, col3 = st.columns([0.1, 0.6, 0.3])
-                    tag = "📢[共有] " if t["created_by"] == "all" else "🔒[個人] "
-                    done = col1.checkbox("", key=f"list_{t['id']}")
-                    label = f"{tag}{t['title']}"
-                    col2.write(f"~~{label}~~ ✅" if done else label)
-                    col3.write(f"⏰ {t['due'].strftime('%m/%d %H:%M')}")
+                    col1, col2 = st.columns([0.7, 0.3])
+                    tag = "📢" if t["created_by"] == "all" else "🔒"
+                    col1.write(f"{tag} **{t['title']}**")
+                    col2.write(f"⏰ {t['due'].strftime('%m/%d %H:%M')}")
 
 with tab2:
     calendar_events = []
     for _, t in my_visible_tasks.iterrows():
         calendar_events.append({
-            "id": str(t["id"]),
             "title": f"[{t['lecture']}] {t['title']}",
             "start": t["due"].isoformat(),
             "color": "#ff4b4b" if t["created_by"] == "all" else "#007bff"
         })
-    calendar(events=calendar_events, options={"initialView": "dayGridMonth"})
-
-with tab3:
-    st.subheader("自分の課題の削除・編集")
-    my_own_mask = df_all["created_by"] == user_name
-    my_own_df = df_all[my_own_mask]
-    if not my_own_df.empty:
-        edited_df = st.data_editor(my_own_df, column_config={"id": None, "created_by": None}, num_rows="dynamic")
-        if st.button("変更を反映"):
-            others_df = df_all[~my_own_mask]
-            final_df = pd.concat([others_df, edited_df], ignore_index=True)
-            save_data(final_df)
-            st.success("更新しました！")
-            st.rerun()
-    else:
-        st.write("対象の課題はありません。")
+    calendar(events=calendar_events)
