@@ -89,22 +89,53 @@ with tab1:
 
 with tab2:
     st.subheader("期限カレンダー")
-    # カレンダー用イベント作成
-    calendar_events = []
-    for item in st.session_state.assignments:
-        if item['lecture'] not in st.session_state.hidden_lectures:
-            is_done = st.session_state.my_status.get(item['id'], False)
-            calendar_events.append({
-                "title": f"[{item['lecture']}] {item['title']}",
-                "start": item['due'].isoformat(),
-                "color": "#28a745" if is_done else "#ff4b4b" # 完了は緑、未完了は赤
-            })
     
-    calendar_options = {
-        "initialView": "dayGridMonth",
-        "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth,timeGridWeek"},
-    }
-    calendar(events=calendar_events, options=calendar_options)
+    # 1. カレンダー用イベントの作成
+    calendar_events = []
+    if not st.session_state.assignments:
+        st.info("課題データがありません。サイドバーから追加してください。")
+    else:
+        for item in st.session_state.assignments:
+            # 非表示設定の講義を除外
+            if item['lecture'] not in st.session_state.hidden_lectures:
+                is_done = st.session_state.my_status.get(item['id'], False)
+                
+                # イベントデータを構築
+                calendar_events.append({
+                    "id": item['id'],
+                    "title": f"[{item['lecture']}] {item['title']}",
+                    "start": pd.to_datetime(item['due']).isoformat(),
+                    "color": "#28a745" if is_done else "#ff4b4b", # 完了：緑、未完了：赤
+                    "allDay": False
+                })
+
+        # 2. カレンダーの表示設定
+        calendar_options = {
+            "initialView": "dayGridMonth",
+            "headerToolbar": {
+                "left": "prev,next today",
+                "center": "title",
+                "right": "dayGridMonth,timeGridWeek"
+            },
+            "selectable": True,
+            "navLinks": True,
+        }
+
+        # 3. カレンダーの実行とクリック検知
+        # ここで state に保存することで、クリックした際の反応を良くします
+        cal_data = calendar(
+            events=calendar_events,
+            options=calendar_options,
+            key="calendar_widget"
+        )
+
+        # 4. クリック時の詳細表示機能
+        if cal_data.get("eventClick"):
+            clicked_event = cal_data["eventClick"]["event"]
+            st.write("---")
+            st.success(f"📌 **選択中の課題詳細**")
+            st.markdown(f"**タイトル:** {clicked_event['title']}")
+            st.info("※ 完了チェックや編集は「講義別リスト」または「管理・削除」タブで行ってください。")
 
 with tab3:
     st.subheader("全データの管理（編集・削除）")
