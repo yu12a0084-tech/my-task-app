@@ -8,14 +8,20 @@ from streamlit_calendar import calendar  # ← これが NameError の原因で�
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
 # --- スプレッドシート接続設定 (TypeError対策版) ---
+# --- スプレッドシート接続設定 (Type衝突対策版) ---
 def get_gsheets_connection():
-    # Secretsからデータを取得
+    # 1. Secretsから辞書として取得
     conf = st.secrets.connections.gsheets.to_dict()
-    # 秘密鍵の改行文字（\n）を本物の改行コードに変換
+    
+    # 2. 秘密鍵の改行文字を本物の改行コードに変換
     if "private_key" in conf:
         conf["private_key"] = conf["private_key"].replace("\\n", "\n")
     
-    # 修正した設定を使って接続を作成
+    # 3. Secrets側の "type" (service_account) を一旦消す（衝突回避）
+    if "type" in conf:
+        del conf["type"]
+    
+    # 4. プログラム側で正しい接続クラスを指定して接続
     return st.connection("gsheets", type=GSheetsConnection, **conf)
 
 # 接続の実行
