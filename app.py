@@ -6,16 +6,17 @@ from streamlit_calendar import calendar
 
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
-# get_safe_connection を定義
 def get_safe_connection():
+    # Secretsから辞書を取得
     conf = st.secrets.connections.gsheets.to_dict()
+    # 秘密鍵の改行を復元
     if "private_key" in conf:
         conf["private_key"] = conf["private_key"].replace("\\n", "\n")
-    if "type" in conf:
-        del conf["type"]
+    
+    # st.connectionに渡す引数を整理
+    # connection_name引数と競合しないよう、中身を直接渡す
     return st.connection("gsheets", type=GSheetsConnection, **conf)
 
-# 接続実行
 conn = get_safe_connection()
 
 def load_data():
