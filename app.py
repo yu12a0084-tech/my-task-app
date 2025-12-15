@@ -6,21 +6,28 @@ from streamlit_calendar import calendar
 
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
-# --- 接続設定 (徹底的にシンプルにしました) ---
-# Secretsの [connections.gsheets] セクションをライブラリに自動で読み込ませます。
-# これにより、手動で引数を渡すことで発生していた TypeError を完全に回避します。
-conn = st.connection("gsheets", type=GSheetsConnection)
+# --- 接続設定（書き込みを成功させるための修正） ---
+def get_connection():
+    # Secretsの内容を取得
+    secret_data = st.secrets.connections.gsheets.to_dict()
+    # 秘密鍵の中の「\\n」を「本物の改行」に変換（これが無いと書き込み権限エラーになります）
+    if "private_key" in secret_data:
+        secret_data["private_key"] = secret_data["private_key"].replace("\\n", "\n")
+    # typeが重複してTypeErrorになるのを防ぐ
+    if "type" in secret_data:
+        del secret_data["type"]
+    
+    return st.connection("gsheets", type=GSheetsConnection, **secret_data)
+
+conn = get_connection()
 
 def load_data():
     try:
-        # 読み込み
         data = conn.read(ttl="0s")
-        # 期待する5つの列が存在することを確認（不足していれば補完）
         cols = ["id", "lecture", "title", "due", "created_by"]
         if data is None or data.empty:
             return pd.DataFrame(columns=cols)
-        
-        # 列名がズレている、または足りない場合の保険
+        # 必要な列が揃っているか確認
         for col in cols:
             if col not in data.columns:
                 data[col] = None
@@ -30,11 +37,14 @@ def load_data():
 
 def save_data(df):
     try:
+        # スプレッドシートを更新
         conn.update(data=df)
+        return True
     except Exception as e:
-        st.error(f"保存エラー: {e}")
+        st.error(f"保存に失敗しました。権限または鍵の設定を確認してください: {e}")
+        return False
 
-# --- ログイン・UI ---
+# --- ログイン設定 ---
 st.sidebar.title("👤 ログイン")
 user_name = st.sidebar.text_input("合言葉を入力（例：ゆうすけ29）", key="user_name")
 
@@ -42,7 +52,7 @@ if not user_name:
     st.info("左側のサイドバーに合言葉を入力してください。")
     st.stop()
 
-# データの取得と日付の正規化
+# データの取得
 df_all = load_data()
 if not df_all.empty:
     df_all["due"] = pd.to_datetime(df_all["due"], errors='coerce').fillna(pd.Timestamp.now())
@@ -66,19 +76,19 @@ with st.sidebar.form("add_form", clear_on_submit=True):
             
             new_row = pd.DataFrame([{"id": new_id, "lecture": lec, "title": task, "due": due_dt, "created_by": creator}])
             df_updated = pd.concat([df_all, new_row], ignore_index=True)
-            save_data(df_updated)
-            st.success("保存完了！")
-            st.rerun()
+            
+            if save_data(df_updated):
+                st.success("スプレッドシートに保存しました！")
+                st.rerun()
 
-# --- 表示タブ ---
-# 「全員共有」または「自分の名前」の課題だけを抽出
+# --- 表示 ---
 my_visible_tasks = df_all[(df_all["created_by"] == "all") | (df_all["created_by"] == user_name)]
 
 tab1, tab2 = st.tabs(["📋 リスト", "📅 カレンダー"])
 
 with tab1:
     if my_visible_tasks.empty:
-        st.warning("表示できる課題がありません。サイドバーから追加してください。")
+        st.warning("表示できる課題がありません。")
     else:
         for lec in sorted(my_visible_tasks["lecture"].unique()):
             with st.expander(f"📖 {lec}", expanded=True):
