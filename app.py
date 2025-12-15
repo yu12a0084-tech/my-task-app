@@ -19,11 +19,28 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
     try:
-        # 最新のデータをスプレッドシートから取得
-        return conn.read(ttl="0s")
+        data = conn.read(ttl="0s")
+        # 読み込んだデータがNoneまたは空の場合、正しい列を持つ空のDFを返す
+        if data is None or data.empty:
+            return pd.DataFrame(columns=["id", "lecture", "title", "due", "created_by"])
+        return data
     except Exception as e:
-        # データが空、または初回接続時のための空データフレーム
+        # 接続エラーなどが起きた場合も止まらずに空のDFを返す
         return pd.DataFrame(columns=["id", "lecture", "title", "due", "created_by"])
+
+# --- ログイン後のデータ処理部分 ---
+df_all = load_data()
+
+# 列が足りない場合の補完
+for col in ["id", "lecture", "title", "due", "created_by"]:
+    if col not in df_all.columns:
+        df_all[col] = None
+
+# 日付の変換（エラーが出やすい箇所なので安全に処理）
+if not df_all.empty:
+    df_all["due"] = pd.to_datetime(df_all["due"], errors='coerce')
+    # 変換に失敗（NaT）した行を今日の日付で埋める
+    df_all["due"] = df_all["due"].fillna(pd.Timestamp.now())
 
 def save_data(df):
     # スプレッドシートを更新
