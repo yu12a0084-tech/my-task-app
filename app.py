@@ -2,13 +2,12 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 from datetime import datetime
-from streamlit_calendar import calendar
 
 st.set_page_config(page_title="講義課題管理システム", layout="wide")
 
 # --- データベース設定 ---
 def init_db():
-    conn = sqlite3.connect('task_v3_main.db', check_same_thread=False)
+    conn = sqlite3.connect('task_v4_main.db', check_same_thread=False)
     c = conn.cursor()
     # 課題本体テーブル
     c.execute('''
@@ -56,6 +55,12 @@ def save_task(lec, task, due_dt, creator):
               (task_id, lec, task, due_dt.strftime('%Y-%m-%d %H:%M'), creator))
     db_conn.commit()
 
+def update_task_detail(task_id, lec, task, due_dt):
+    c = db_conn.cursor()
+    c.execute('UPDATE tasks SET lecture=?, title=?, due=? WHERE id=?',
+              (lec, task, due_dt.strftime('%Y-%m-%d %H:%M'), task_id))
+    db_conn.commit()
+
 def delete_task(task_id):
     c = db_conn.cursor()
     c.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
@@ -77,7 +82,7 @@ my_visible_tasks = df_all[(df_all["created_by"] == "all") | (df_all["created_by"
 
 # --- サイドバー：課題追加 ---
 st.sidebar.markdown("---")
-st.sidebar.header("➕ 新規課題")
+st.sidebar.header("➕ 新規課題追加")
 add_mode = st.sidebar.radio("共有範囲", ["自分専用", "全員に共有"])
 with st.sidebar.form("add_form", clear_on_submit=True):
     lec = st.text_input("講義名")
@@ -91,36 +96,62 @@ with st.sidebar.form("add_form", clear_on_submit=True):
 
 st.title(f"📚 {user_name} さんの課題管理")
 
-tab1, tab2 = st.tabs(["📋 リスト・完了管理", "📅 カレンダー"])
-
-with tab1:
-    if my_visible_tasks.empty:
-        st.write("課題はありません。")
-    else:
-        # 講義ごとに表示
-        for lec_name in sorted(my_visible_tasks["lecture"].unique()):
-            with st.expander(f"📖 {lec_name}", expanded=True):
-                lec_tasks = my_visible_tasks[my_visible_tasks["lecture"] == lec_name].sort_values("due")
-                for _, row in lec_tasks.iterrows():
-                    tid = row['id']
-                    # 個別の完了状態を確認
-                    is_completed = tid in df_status[df_status['is_done'] == 1]['task_id'].values
+# --- メインリスト表示 ---
+if my_visible_tasks.empty:
+    st.info("課題はありません。サイドバーから追加してください。")
+else:
+    for lec_name in sorted(my_visible_tasks["lecture"].unique()):
+        with st.expander(f"📖 {lec_name}", expanded=True):
+            lec_tasks = my_visible_tasks[my_visible_tasks["lecture"] == lec_name].sort_values("due")
+            
+            for _, row in lec_tasks.iterrows():
+                tid = row['id']
+                is_completed = tid in df_status[df_status['is_done'] == 1]['task_id'].values
+                
+                # コンテナを使って1つの課題をまとめる
+                container = st.container(border=True)
+                col_check, col_main, col_date, col_edit = container.columns([0.1, 0.45, 0.25, 0.2])
+                
+                # 1. 完了チェック
+                new_done = col_check.checkbox("済", value=is_completed, key=f"check_{tid}")
+                if new_done != is_completed:
+                    update_status(user_name, tid, new_done)
+                    st.rerun()
+                
+                # 2. 内容表示
+                display_title = f"**{row['title']}**"
+                if new_done:
+                    display_title = f"~~{display_title}~~ ✅"
+                tag = "📢" if row['created_by'] == "all" else "🔒"
+                col_main.markdown(f"{tag} {display_title}")
+                
+                # 3. 日付表示
+                col_date.write(f"⏰ {row['due'].strftime('%m/%d %H:%M')}")
+                
+                # 4. 編集・削除ボタン
+                if row['created_by'] == user_name:
+                    btn_col1, btn_col2 = col_edit.columns(2)
+                    if btn_col1.button("📝", key=f"edit_btn_{tid}", help="編集"):
+                        st.session_state[f"editing_{tid}"] = True
                     
-                    col1, col2, col3, col4 = st.columns([0.1, 0.5, 0.3, 0.1])
-                    
-                    # チェックボックス（個別保存）
-                    new_done = col1.checkbox("完了", value=is_completed, key=f"check_{tid}")
-                    if new_done != is_completed:
-                        update_status(user_name, tid, new_done)
+                    if btn_col2.button("🗑️", key=f"del_{tid}", help="削除"):
+                        delete_task(tid)
                         st.rerun()
-                    
-                    # 表示テキスト（完了なら打ち消し線）
-                    display_text = f"**{row['title']}**"
-                    if new_done:
-                        display_text = f"~~{display_text}~~ ✅"
-                    tag = "📢" if row['created_by'] == "all" else "🔒"
-                    col2.markdown(f"{tag} {display_text}")
-                    
-                    col3.write(f"⏰ {row['due'].strftime('%m/%d %H:%M')}")
-                    
-                    # 自分が
+
+                # --- 編集モードの入力フォーム ---
+                if st.session_state.get(f"editing_{tid}", False):
+                    with st.form(key=f"edit_form_{tid}"):
+                        st.write("### 課題の編集")
+                        new_lec = st.text_input("講義名", value=row['lecture'])
+                        new_task = st.text_input("課題内容", value=row['title'])
+                        new_d = st.date_input("日付", value=row['due'].date())
+                        new_t = st.time_input("時間", value=row['due'].time())
+                        
+                        eb1, eb2 = st.columns(2)
+                        if eb1.form_submit_button("更新を保存"):
+                            update_task_detail(tid, new_lec, new_task, datetime.combine(new_d, new_t))
+                            st.session_state[f"editing_{tid}"] = False
+                            st.rerun()
+                        if eb2.form_submit_button("キャンセル"):
+                            st.session_state[f"editing_{tid}"] = False
+                            st.rerun()
