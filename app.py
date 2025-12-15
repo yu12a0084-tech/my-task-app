@@ -1,135 +1,143 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 from datetime import datetime
+import json
+import os
+from streamlit_calendar import calendar
 
-st.set_page_config(page_title="講義課題管理システム", layout="wide")
-
-# --- データベース設定 ---
-def init_db():
-    conn = sqlite3.connect('task_vfinal.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, lecture TEXT, title TEXT, due TEXT, created_by TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS task_status (user_id TEXT, task_id TEXT, is_done INTEGER, PRIMARY KEY (user_id, task_id))''')
-    conn.commit()
-    return conn
-
-db_conn = init_db()
+DATA_FILE = 'assignments_v2.json'
 
 def load_data():
-    df = pd.read_sql('SELECT * FROM tasks', db_conn)
-    if not df.empty:
-        df["due"] = pd.to_datetime(df["due"])
-    return df
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for item in data:
+                    item['due'] = pd.to_datetime(item['due'])
+                return data
+        except: return []
+    return []
 
-def update_status(user_id, task_id, is_done):
-    c = db_conn.cursor()
-    c.execute('INSERT OR REPLACE INTO task_status VALUES (?, ?, ?)', (user_id, task_id, 1 if is_done else 0))
-    db_conn.commit()
+def save_data(data):
+    output_data = []
+    for item in data:
+        new_item = item.copy()
+        if isinstance(new_item['due'], (datetime, pd.Timestamp)):
+            new_item['due'] = new_item['due'].strftime('%Y-%m-%d %H:%M')
+        output_data.append(new_item)
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(output_data, f, ensure_ascii=False, indent=4)
 
-def save_task(lec, task, due_dt, creator):
-    c = db_conn.cursor()
-    task_id = f"{int(datetime.now().timestamp())}_{creator}"
-    c.execute('INSERT INTO tasks VALUES (?, ?, ?, ?, ?)', (task_id, lec, task, due_dt.strftime('%Y-%m-%d %H:%M'), creator))
-    db_conn.commit()
+st.set_page_config(page_title="永続課題管理システム", layout="wide")
 
-def update_task_detail(task_id, lec, task, due_dt):
-    c = db_conn.cursor()
-    c.execute('UPDATE tasks SET lecture=?, title=?, due=? WHERE id=?', (lec, task, due_dt.strftime('%Y-%m-%d %H:%M'), task_id))
-    db_conn.commit()
-
-def delete_task(task_id):
-    c = db_conn.cursor()
-    c.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
-    c.execute('DELETE FROM task_status WHERE task_id = ?', (task_id,))
-    db_conn.commit()
-
-# --- ログイン ---
-st.sidebar.title("👤 ログイン")
-user_name = st.sidebar.text_input("合言葉を入力してください", key="user_login")
+# --- ユーザー識別 ---
+st.sidebar.title("👤 ログイン設定")
+user_name = st.sidebar.text_input("あなたの名前（または合言葉）を入力してください", key="user_name")
 
 if not user_name:
-    st.info("左側のサイドバーに合言葉を入力してください。")
+    st.warning("左側のサイドバーに名前を入力してログインしてください。")
     st.stop()
 
-# セッション状態の初期化（編集中のIDを管理）
-if "editing_id" not in st.session_state:
-    st.session_state.editing_id = None
+# データの読み込み
+if 'all_tasks' not in st.session_state:
+    st.session_state.all_tasks = load_data()
 
-# データ読込
-df_all = load_data()
-df_status = pd.read_sql(f"SELECT * FROM task_status WHERE user_id = '{user_name}'", db_conn)
-my_visible_tasks = df_all[(df_all["created_by"] == "all") | (df_all["created_by"] == user_name)]
+# 各個人の完了チェック状態（これはブラウザセッション中のみですが、課題自体は永続化されます）
+if 'my_status' not in st.session_state:
+    st.session_state.my_status = {}
+
+st.title(f"📚 {user_name} さんの課題マネージャー")
 
 # --- サイドバー：課題追加 ---
+st.sidebar.markdown("---")
+st.sidebar.header("➕ 課題の追加")
+
+add_mode = st.sidebar.radio("追加する種類:", ["自分専用", "全員に共有"])
+
 with st.sidebar.form("add_form", clear_on_submit=True):
-    st.header("➕ 新規課題追加")
-    add_mode = st.radio("共有範囲", ["自分専用", "全員に共有"])
     lec = st.text_input("講義名")
     task = st.text_input("課題内容")
-    d = st.date_input("日付")
-    t = st.time_input("時間")
+    due = st.datetime_input("提出期限", datetime.now())
     if st.form_submit_button("保存"):
         if lec and task:
-            save_task(lec, task, datetime.combine(d, t), "all" if add_mode == "全員に共有" else user_name)
+            new_id = f"{int(datetime.now().timestamp())}_{user_name}"
+            # 作成者を記録（全員共有の場合は 'all'）
+            creator = "all" if add_mode == "全員に共有" else user_name
+            new_entry = {
+                "id": new_id,
+                "lecture": lec,
+                "title": task,
+                "due": due,
+                "created_by": creator
+            }
+            st.session_state.all_tasks.append(new_entry)
+            save_data(st.session_state.all_tasks)
             st.rerun()
 
-st.title(f"📚 {user_name} さんの課題管理")
+# --- データのフィルタリング ---
+# 1. 全員共有のもの 2. 自分が作ったもの のみを表示
+my_visible_tasks = [
+    t for t in st.session_state.all_tasks 
+    if t.get('created_by') == "all" or t.get('created_by') == user_name
+]
 
-# --- メインリスト表示 ---
-if my_visible_tasks.empty:
-    st.info("表示できる課題はありません。")
-else:
-    for lec_name in sorted(my_visible_tasks["lecture"].unique()):
-        st.subheader(f"📖 {lec_name}")
-        lec_tasks = my_visible_tasks[my_visible_tasks["lecture"] == lec_name].sort_values("due")
+# --- メイン画面 ---
+tab1, tab2, tab3 = st.tabs(["📋 課題リスト", "📅 カレンダー", "🗑️ 課題の編集・削除"])
+
+with tab1:
+    if not my_visible_tasks:
+        st.info("表示できる課題がありません。")
+    else:
+        # 講義の非表示フィルタ
+        all_lecs = sorted(list(set(t['lecture'] for t in my_visible_tasks)))
+        hidden = st.multiselect("非表示にする講義:", options=all_lecs)
         
-        for _, row in lec_tasks.iterrows():
-            tid = row['id']
-            is_completed = tid in df_status[df_status['is_done'] == 1]['task_id'].values
-            
-            with st.container(border=True):
-                # 現在この課題が「編集モード」かどうか
-                if st.session_state.editing_id == tid:
-                    # --- 編集フォーム表示 ---
-                    st.markdown(f"#### 📝 編集: {row['title']}")
-                    with st.form(key=f"edit_form_{tid}"):
-                        new_lec = st.text_input("講義名", value=row['lecture'])
-                        new_task = st.text_input("内容", value=row['title'])
-                        col_d, col_t = st.columns(2)
-                        new_d = col_d.date_input("日付", value=row['due'].date())
-                        new_t = col_t.time_input("時間", value=row['due'].time())
-                        
-                        b1, b2 = st.columns(2)
-                        if b1.form_submit_button("✅ 更新を保存"):
-                            update_task_detail(tid, new_lec, new_task, datetime.combine(new_d, new_t))
-                            st.session_state.editing_id = None
-                            st.rerun()
-                        if b2.form_submit_button("❌ キャンセル"):
-                            st.session_state.editing_id = None
-                            st.rerun()
-                else:
-                    # --- 通常表示モード ---
-                    c1, c2, c3, c4 = st.columns([0.1, 0.5, 0.25, 0.15])
+        filtered_tasks = [t for t in my_visible_tasks if t['lecture'] not in hidden]
+        
+        for lec in sorted(list(set(t['lecture'] for t in filtered_tasks))):
+            with st.expander(f"📖 {lec}", expanded=True):
+                lec_tasks = sorted([t for t in filtered_tasks if t['lecture'] == lec], key=lambda x: x['due'])
+                for t in lec_tasks:
+                    col1, col2, col3 = st.columns([0.1, 0.6, 0.3])
+                    is_shared = t.get('created_by') == "all"
+                    tag = "📢[共有] " if is_shared else "🔒[自分] "
                     
-                    done = c1.checkbox("済", value=is_completed, key=f"chk_{tid}")
-                    if done != is_completed:
-                        update_status(user_name, tid, done)
-                        st.rerun()
-                    
-                    tag = "📢" if row['created_by'] == "all" else "🔒"
-                    title_text = f"**{row['title']}**"
-                    if done: title_text = f"~~{title_text}~~ ✅"
-                    c2.markdown(f"{tag} {title_text}")
-                    
-                    c3.write(f"⏰ {row['due'].strftime('%m/%d %H:%M')}")
-                    
-                    # 自分が作成した課題のみ編集・削除可能
-                    if row['created_by'] == user_name:
-                        edit_btn, del_btn = c4.columns(2)
-                        if edit_btn.button("📝", key=f"edit_{tid}"):
-                            st.session_state.editing_id = tid
-                            st.rerun()
-                        if del_btn.button("🗑️", key=f"del_{tid}"):
-                            delete_task(tid)
-                            st.rerun()
+                    done = col1.checkbox("", key=f"check_{t['id']}")
+                    text = f"{tag}**{t['title']}**"
+                    col2.write(f"~~{text}~~ ✅" if done else text)
+                    col3.write(f"⏰ {t['due'].strftime('%m/%d %H:%M')}")
+
+with tab2:
+    calendar_events = []
+    for t in my_visible_tasks:
+        is_shared = t.get('created_by') == "all"
+        calendar_events.append({
+            "id": t['id'],
+            "title": f"{'📢' if is_shared else '🔒'}{t['title']}",
+            "start": t['due'].isoformat(),
+            "color": "#ff4b4b" if is_shared else "#007bff"
+        })
+    calendar(events=calendar_events, options={"initialView": "dayGridMonth"})
+
+with tab3:
+    st.subheader("作成した課題の管理")
+    st.caption("あなたが作成した課題（共有・個人問わず）のみ編集・削除できます。")
+    
+    # 自分が作成者であるデータのみ編集可能にする
+    my_own_data = [t for t in st.session_state.all_tasks if t.get('created_by') == user_name or (user_name == "admin" and t.get('created_by') == "all")]
+    
+    if my_own_data:
+        df = pd.DataFrame(my_own_data)
+        edited_df = st.data_editor(df, column_config={"id": None, "created_by": None}, num_rows="dynamic")
+        
+        if st.button("変更を確定して保存"):
+            # 1. 自分のデータ以外を抽出
+            other_data = [t for t in st.session_state.all_tasks if not (t.get('created_by') == user_name or (user_name == "admin" and t.get('created_by') == "all"))]
+            # 2. 編集後の自分のデータを結合
+            new_all_tasks = other_data + edited_df.to_dict('records')
+            st.session_state.all_tasks = new_all_tasks
+            save_data(new_all_tasks)
+            st.success("保存しました。")
+            st.rerun()
+    else:
+        st.write("編集できる課題がありません。")
