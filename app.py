@@ -122,4 +122,5 @@ with tab2:
             "color": "#ff4b4b" if is_shared else "#007bff"
         })
     
-    calendar(events=calendar_events, options
+    calendar(events=calendar_events, options={"initialView": "dayGridMonth"})
+    st.caption("🔴 赤: 全員共有 / 🔵 青: 自分専用")
