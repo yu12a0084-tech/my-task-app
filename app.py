@@ -21,7 +21,7 @@ def save_data(df):
 
 # --- ログイン設定 ---
 st.sidebar.title("👤 ログイン設定")
-st.sidebar.info("合言葉：名前(ひらがな) + 誕生日(2桁)\n例：たろう05")
+st.sidebar.info("合言葉：名前(ひらがな) + 誕生日(2桁)\n例：ゆうすけ29")
 user_name = st.sidebar.text_input("合言葉を入力してください", key="user_name")
 
 if not user_name:
@@ -111,7 +111,6 @@ with tab3:
     my_own_df = df_all[my_own_mask]
     
     if not my_own_df.empty:
-        # エディタで直接編集可能
         edited_df = st.data_editor(
             my_own_df, 
             column_config={"id": None, "created_by": None}, 
@@ -120,7 +119,6 @@ with tab3:
         )
         
         if st.button("変更を確定して保存"):
-            # 自分のデータ以外を抽出して合体
             others_df = df_all[~my_own_mask]
             final_df = pd.concat([others_df, edited_df], ignore_index=True)
             save_data(final_df)
