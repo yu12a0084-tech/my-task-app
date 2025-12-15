@@ -7,7 +7,8 @@ from streamlit_javascript import st_javascript # 初回のみ必要
 
 # データの保存用ファイル名（共有用）
 DATA_FILE = 'assignments.json'
-
+# これを削除
+# from streamlit_javascript import st_javascript
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
